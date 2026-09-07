@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: solidarity-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: solidarity
+      POSTGRES_PASSWORD: solidarity
+      POSTGRES_DB: solidarity
+    ports:
+      - "5433:5432"
+    volumes:
+      - solidarity_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  solidarity_postgres_data:
