@@ -1,231 +1,143 @@
 # ConectaSolidária
 
-Plataforma web acadêmica que conecta **ONGs com campanhas de arrecadação** a **pessoas interessadas em ajudar**.
+Plataforma acadêmica para ONGs divulgarem campanhas de arrecadação material e para doadores registrarem contribuições que a instituição pode confirmar ou cancelar.
 
-A aplicação foi desenhada para demonstrar um sistema completo com **front-end, back-end, PostgreSQL, autenticação por perfil, CRUD, regras de negócio, tabelas, métricas, KPIs e dashboards** sem ampliar o escopo com funcionalidades que não são essenciais para a entrega.
+## Problema e solução
 
-## Problema
+Campanhas e necessidades de ONGs costumam ficar dispersas em canais diferentes, dificultando descobrir o que está ativo, acompanhar o progresso e saber se uma contribuição foi recebida. O ConectaSolidária centraliza campanhas, registro e confirmação de doações, histórico e indicadores calculados a partir do banco.
 
-Muitas ONGs divulgam necessidades por redes sociais, aplicativos de mensagem e canais isolados. Isso dificulta para o potencial doador descobrir:
+O sistema não processa pagamentos. Uma doação representa uma contribuição material registrada pelo doador e confirmada posteriormente pela ONG.
 
-- quais campanhas estão ativas;
-- o que a ONG realmente precisa;
-- quanto já foi arrecadado;
-- quanto ainda falta para a meta;
-- se a contribuição informada foi efetivamente recebida.
+## Arquitetura
 
-Do lado da ONG, o acompanhamento também tende a ficar disperso, dificultando a visualização de campanhas, doações pendentes e indicadores de impacto.
-
-## Como a aplicação resolve essa dor
-
-O ConectaSolidária centraliza o fluxo:
+- **Backend:** Node.js 20+, TypeScript, Express 5, Prisma 6 e PostgreSQL 16.
+- **Frontend:** React 19, TypeScript, Vite, React Router, Axios e Recharts.
+- **Autenticação:** um único modelo `User`, com os papéis `DONOR` e `NGO`; senha armazenada com bcrypt e token JWT com validade de oito horas.
+- **Banco local:** PostgreSQL via Docker Compose, exposto na porta **5433** do host e atendido na porta 5432 dentro do contêiner.
 
 ```text
-ONG cria campanha
-       ↓
-Doador encontra a campanha
-       ↓
-Doador registra intenção de doação
-       ↓
-Doação fica PENDING
-       ↓
-ONG confirma recebimento
-       ↓
-Doação vira RECEIVED
-       ↓
-Meta e dashboard são atualizados
+React/Vite ── HTTP + JWT ── Express ── Prisma ── PostgreSQL
+                                  ├── DONOR: campanhas, doações e dashboard pessoal
+                                  └── NGO: campanhas, recebimentos e dashboard institucional
 ```
 
-O projeto possui dois perfis com interfaces e permissões diferentes.
-
-### ONG
-
-- login exclusivo por perfil;
-- dashboard institucional;
-- criação e listagem de campanhas;
-- definição de categoria, meta e unidade;
-- visualização das doações recebidas;
-- confirmação ou cancelamento de doações;
-- acompanhamento automático do progresso;
-- KPIs de campanhas, doações, doadores e itens arrecadados;
-- gráfico de arrecadação por categoria.
+## Atores e funcionalidades
 
 ### Doador
 
-- login exclusivo por perfil;
-- dashboard pessoal;
-- busca de campanhas;
-- visualização do progresso das metas;
-- registro de intenção de doação;
-- histórico de contribuições;
-- KPIs de campanhas apoiadas, ONGs ajudadas e itens doados;
-- gráfico de contribuições por categoria.
+- Cadastro e login como doador.
+- Busca de campanhas por texto, categoria e cidade, com paginação.
+- Registro de contribuição pendente e consulta do histórico.
+- Dashboard com contribuições totais, confirmadas e pendentes, campanhas e ONGs apoiadas, evolução mensal e quantidades recebidas discriminadas por unidade.
 
-## Escopo intencional da V1
+### ONG
 
-Esta versão **não processa dinheiro**. Uma doação representa uma intenção de contribuição material, posteriormente confirmada pela ONG.
+- Cadastro e login institucional.
+- Criação, edição, listagem, cancelamento e acompanhamento de campanhas.
+- Consulta de doações pendentes e confirmação ou cancelamento.
+- Conclusão manual de campanhas ativas, além da conclusão automática ao atingir a meta.
+- Dashboard com campanhas ativas, concluídas, concluídas pela meta ou manualmente, doações recebidas e pendentes, doadores únicos, progresso, arrecadação por categoria/unidade e evolução mensal.
 
-Também ficaram fora da V1:
+## Regras de negócio
 
-- PIX/cartão;
-- chat;
-- mapa/geolocalização;
-- eventos;
-- voluntariado;
-- notificações;
-- gestão de beneficiários;
-- estoque.
+### Doações e campanhas
 
-Esses recursos podem virar evoluções futuras sem comprometer a entrega principal.
+- O ciclo de uma doação é `PENDING → RECEIVED` ou `PENDING → CANCELED`. Uma doação processada não pode mudar novamente de estado.
+- Somente a ONG proprietária pode processar doações da campanha. Donos de outras ONGs não podem consultar ou alterar recursos institucionais alheios.
+- Doações pendentes e canceladas não entram na arrecadação. Somente `RECEIVED` atualiza a quantidade arrecadada.
+- Confirmação e atualização da campanha acontecem na mesma transação PostgreSQL com isolamento `Serializable`, atualização condicional e repetição limitada de conflitos de serialização.
+- Campanhas `DRAFT`, `CANCELED`, `COMPLETED`, ainda não iniciadas ou com prazo vencido não aceitam novas doações.
+- A meta precisa ser positiva e a data final não pode anteceder a inicial. Uma campanha ativa pode ser concluída manualmente ou ser concluída automaticamente ao atingir a meta; o motivo fica registrado separadamente.
+- **Pendências na conclusão automática:** doações já registradas e pendentes antes de a campanha atingir a meta permanecem disponíveis para confirmação ou cancelamento. São compromissos anteriores; se confirmadas, são contabilizadas uma vez e a campanha permanece concluída, ainda que a arrecadação ultrapasse a meta. Novas doações não são aceitas.
+- **Pendências na conclusão manual:** doações pendentes são canceladas na mesma transação que conclui a campanha. Doações recebidas e sua arrecadação são preservadas. A meta e a quantidade recebida não são alteradas artificialmente.
+- **Pendências no cancelamento:** cancelar uma campanha também cancela suas doações pendentes, preservando o histórico. Doações já recebidas permanecem contabilizadas. Campanha com histórico não é removida fisicamente.
+- Edições só são permitidas em campanhas em rascunho ou ativas. Campanhas concluídas ou canceladas não podem ser alteradas. O progresso sempre representa a arrecadação recebida real; a conclusão manual abaixo da meta não equivale a meta atingida.
 
-## Stack
+### Unidades e indicadores
 
-### Back-end
+Cestas, quilos, kits e peças são unidades distintas. O sistema não apresenta uma soma dessas quantidades como um total homogêneo: dashboards e gráficos agrupam arrecadação por **categoria e unidade**, e os indicadores de quantidade mostram o total separado por unidade. A evolução mensal mostra número de confirmações, sem somar unidades distintas.
 
-- Node.js
-- TypeScript
-- Express
-- Prisma ORM
-- PostgreSQL
-- JWT
-- bcryptjs
-- Zod
+## Endpoints
 
-### Front-end
+Todas as rotas privadas exigem `Authorization: Bearer <token>`.
 
-- React
-- TypeScript
-- Vite
-- Axios
-- Recharts
-- Lucide React
-- CSS responsivo
+| Método | Rota | Acesso | Descrição |
+| --- | --- | --- | --- |
+| `POST` | `/auth/register/donor` | Público | Cadastrar doador |
+| `POST` | `/auth/register/ngo` | Público | Cadastrar ONG e responsável |
+| `POST` | `/auth/login` | Público | Login; aceita `expectedRole` opcional |
+| `GET` | `/auth/me` | Autenticado | Consultar perfil da sessão |
+| `GET` | `/categories` | Público | Listar categorias |
+| `GET` | `/campaigns` | Público | Buscar campanhas ativas e vigentes |
+| `GET` | `/donor/dashboard` | `DONOR` | KPIs, evolução e contribuições recentes |
+| `GET` | `/donor/donations` | `DONOR` | Histórico próprio |
+| `POST` | `/donor/donations` | `DONOR` | Registrar contribuição pendente |
+| `GET` | `/ngo/dashboard` | `NGO` | KPIs e progresso institucional |
+| `GET` | `/ngo/campaigns` | `NGO` | Listar campanhas próprias |
+| `POST` | `/ngo/campaigns` | `NGO` | Criar campanha |
+| `PUT` | `/ngo/campaigns/:id` | `NGO` | Editar campanha própria |
+| `POST` | `/ngo/campaigns/:id/complete` | `NGO` | Concluir campanha ativa e cancelar doações pendentes |
+| `DELETE` | `/ngo/campaigns/:id` | `NGO` | Excluir campanha sem histórico ou cancelar preservando histórico |
+| `GET` | `/ngo/donations` | `NGO` | Listar doações das campanhas próprias |
+| `PATCH` | `/ngo/donations/:id/status` | `NGO` | Confirmar ou cancelar doação pendente |
+| `GET` | `/health` | Público | Verificar disponibilidade da API |
 
-### Banco local
+### Filtros e paginação de campanhas
 
-- PostgreSQL 16 via Docker Compose
-
-## Banco de dados
-
-Entidades principais:
-
-```text
-User
- ├── DONOR
- └── NGO
-       │
-       └── Organization
-              │
-              └── Campaign
-                     │
-                     └── Donation ← DONOR
-
-Category ─────────── Campaign
-```
-
-Principais status:
+`GET /campaigns` aceita `search`, `category` (slug), `city`, `page` e `pageSize` (máximo 50; padrão 12). Exemplo:
 
 ```text
-CampaignStatus
-DRAFT | ACTIVE | COMPLETED | CANCELED
-
-DonationStatus
-PENDING | RECEIVED | CANCELED
+GET /campaigns?search=alimentos&category=alimentos&city=São%20Paulo&page=1&pageSize=12
 ```
 
-Somente doações `RECEIVED` contam para a quantidade arrecadada.
+A resposta contém `items` e `pagination` com `page`, `pageSize`, `total` e `pages`.
 
-Quando `receivedQuantity >= goalQuantity`, a campanha é marcada automaticamente como `COMPLETED`.
+## Requisitos
 
-## Estrutura
+- Node.js 20 ou superior e npm.
+- Docker Desktop com Docker Compose.
+- Git para obter o projeto.
 
-```text
-solidarity-platform/
-├── backend/
-│   ├── prisma/
-│   │   ├── schema.prisma
-│   │   └── seed.ts
-│   └── src/
-│       ├── controllers/
-│       ├── lib/
-│       ├── middlewares/
-│       ├── schemas/
-│       ├── services/
-│       ├── types/
-│       ├── app.ts
-│       └── server.ts
-├── frontend/
-│   └── src/
-│       ├── App.tsx
-│       ├── main.tsx
-│       └── styles.css
-├── docker-compose.yml
-└── README.md
-```
+## Instalação e execução
 
-# Como executar
+### 1. PostgreSQL local
 
-## Pré-requisitos
-
-- Node.js 20+
-- npm
-- Docker Desktop
-
-## 1. Subir o PostgreSQL
-
-Na raiz:
+Na raiz do projeto:
 
 ```bash
 docker compose up -d
 ```
 
-Banco padrão:
+Configuração local do Compose:
 
 ```text
 Host: localhost
-Porta: 5432
+Porta externa: 5433
 Banco: solidarity
 Usuário: solidarity
-Senha: solidarity
+Senha local: solidarity
 ```
 
-## 2. Configurar o back-end
+Essas credenciais são apenas para o ambiente de desenvolvimento local. Não as reutilize em produção.
+
+### 2. Backend
 
 ```bash
 cd backend
 npm install
 ```
 
-Copie `.env.example` para `.env`.
-
-PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Depois:
+Copie `.env.example` para `.env` (PowerShell: `Copy-Item .env.example .env`). Configure `DATABASE_URL`, `JWT_SECRET`, `PORT` e `FRONTEND_URL`. O exemplo já aponta para o PostgreSQL local na porta 5433; substitua o segredo JWT por um valor aleatório local.
 
 ```bash
 npx prisma generate
-npx prisma migrate dev --name init
-npm run seed
+npx prisma migrate dev
 npm run dev
 ```
 
-API:
+A API fica disponível em `http://localhost:3333`.
 
-```text
-http://localhost:3333
-```
-
-Teste:
-
-```text
-GET http://localhost:3333/health
-```
-
-## 3. Configurar o front-end
+### 3. Frontend
 
 Em outro terminal:
 
@@ -234,116 +146,64 @@ cd frontend
 npm install
 ```
 
-Copie `.env.example` para `.env` e execute:
+Copie `.env.example` para `.env` e ajuste `VITE_API_URL` se a API não estiver em `http://localhost:3333`.
 
 ```bash
 npm run dev
 ```
 
-Acesse:
+A aplicação fica disponível em `http://localhost:5173`.
 
-```text
-http://localhost:5173
+### Migrations
+
+As migrations versionadas ficam em `backend/prisma/migrations`. Em ambiente de desenvolvimento, `npx prisma migrate dev` aplica as migrations pendentes. Para inicialização de outro ambiente já preparado, use `npx prisma migrate deploy`; não apague nem recrie o banco para atualizar o schema.
+
+### Seed e contas de demonstração
+
+O seed cria categorias, duas ONGs, doadores, campanhas e doações de demonstração. Contas definidas no seed:
+
+| Perfil | E-mail | Senha local de demonstração |
+| --- | --- | --- |
+| ONG | `ong@demo.com` | `123456` |
+| Doador | `doador@demo.com` | `123456` |
+
+**Atenção:** o seed atual apaga registros existentes das tabelas de doações, campanhas, organizações, usuários e categorias antes de criar os dados de demonstração. Não o execute em um banco com dados que devam ser preservados. Use somente uma base local descartável e faça backup antes de executá-lo.
+
+Para executar conscientemente em um banco local descartável:
+
+```bash
+cd backend
+npm run seed
 ```
 
-# Contas de demonstração
+## Testes e verificações
 
-O seed já cria dados para que os dashboards não apareçam vazios.
+Os testes de integração usam o runner nativo `node:test`, `tsx` já instalado e o PostgreSQL configurado em `backend/.env`. Criam registros com identificadores exclusivos e removem somente os registros criados pelo próprio teste; não executam migrations nem seed.
 
-### ONG
-
-```text
-E-mail: ong@demo.com
-Senha: 123456
+```bash
+cd backend
+npm test
+npm run build
+npx prisma validate
 ```
 
-### Doador
+Build do frontend:
 
-```text
-E-mail: doador@demo.com
-Senha: 123456
+```bash
+cd frontend
+npm run build
 ```
 
-## Endpoints principais
+Execute os testes em um banco local já migrado. A suíte cobre autorização por perfil, isolamento entre ONGs, doações pendentes e canceladas, confirmação única e concorrente, conclusão por meta, campanhas canceladas/vencidas e atualização dos dashboards.
 
-### Auth
+## Fluxo principal para demonstração
 
-```text
-POST /auth/register/donor
-POST /auth/register/ngo
-POST /auth/login
-GET  /auth/me
-```
+1. Entre como ONG e crie uma campanha ativa.
+2. Entre como doador e encontre a campanha usando busca, categoria ou cidade.
+3. Registre uma contribuição; ela aparecerá como pendente e não alterará a arrecadação.
+4. Entre como ONG e confirme a doação.
+5. Confira o progresso da campanha e os indicadores dos dois dashboards.
 
-### Público
+## Fora do escopo
 
-```text
-GET /categories
-GET /campaigns
-```
-
-### ONG
-
-```text
-GET    /ngo/dashboard
-GET    /ngo/campaigns
-POST   /ngo/campaigns
-PUT    /ngo/campaigns/:id
-DELETE /ngo/campaigns/:id
-GET    /ngo/donations
-PATCH  /ngo/donations/:id/status
-```
-
-### Doador
-
-```text
-GET  /donor/dashboard
-GET  /donor/donations
-POST /donor/donations
-```
-
-# Roteiro sugerido para apresentação
-
-1. Entrar como ONG.
-2. Mostrar KPIs e gráfico do dashboard.
-3. Abrir campanhas e criar uma nova.
-4. Sair.
-5. Entrar como doador.
-6. Buscar a campanha criada.
-7. Clicar em `Quero ajudar` e informar uma quantidade.
-8. Mostrar a doação como pendente.
-9. Entrar novamente como ONG.
-10. Abrir a tabela de doações.
-11. Confirmar o recebimento.
-12. Voltar ao dashboard e mostrar os indicadores atualizados.
-13. Entrar como doador e mostrar a contribuição como recebida.
-
-Esse fluxo demonstra em poucos minutos:
-
-- autenticação;
-- autorização;
-- banco de dados;
-- CRUD;
-- integração front/back;
-- regra de negócio;
-- atualização de estado;
-- tabela;
-- métricas;
-- KPI;
-- gráfico.
-
-## Evoluções futuras
-
-Depois da V1 estar estável, as melhores evoluções são:
-
-1. mapa de ONGs/campanhas;
-2. upload de imagem;
-3. voluntariado;
-4. paginação avançada;
-5. relatórios exportáveis;
-6. notificações;
-7. painel administrativo.
-
----
-
-**Objetivo da arquitetura:** manter o projeto suficientemente completo para demonstrar uma aplicação real, mas pequeno o bastante para o grupo entender, apresentar e manter sem depender de IA para cada alteração.
+Pagamentos, PIX/cartão, OAuth, refresh token, recuperação de senha, logística, mapas, notificações e filas não fazem parte desta versão.
